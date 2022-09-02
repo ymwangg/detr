@@ -269,6 +269,20 @@ def get_sha():
 def collate_fn(batch):
     batch = list(zip(*batch))
     batch[0] = nested_tensor_from_tensor_list(batch[0])
+    NO_OBJECT_LABEL = 91
+    for data in batch[1]:
+        num_classes = len(data['labels'])
+        padded_boxes = torch.zeros((100, 4))
+        padded_boxes[:num_classes] = data['boxes']
+        data['boxes'] = padded_boxes
+        padded_classes = torch.full((100,), NO_OBJECT_LABEL, dtype=data['labels'].dtype)
+        padded_classes[:num_classes] = data['labels']
+        data['labels'] = padded_classes
+        mask = torch.zeros((100,))
+        mask[:num_classes] = 1.0
+        data['masks'] = mask
+        # for k in ['image_id', 'area', 'iscrowd', 'orig_size', 'size']:
+        #     data.pop(k)
     return tuple(batch)
 
 
@@ -313,7 +327,8 @@ def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
             return _onnx_nested_tensor_from_tensor_list(tensor_list)
 
         # TODO make it support different-sized images
-        max_size = _max_by_axis([list(img.shape) for img in tensor_list])
+        # max_size = _max_by_axis([list(img.shape) for img in tensor_list])
+        max_size = [3, 1335, 1335]
         # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
         batch_shape = [len(tensor_list)] + max_size
         b, c, h, w = batch_shape
@@ -430,20 +445,21 @@ def init_distributed_mode(args):
 
 
 @torch.no_grad()
-def accuracy(output, target, topk=(1,)):
+def accuracy(output, target, target_masks, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
     if target.numel() == 0:
         return [torch.zeros([], device=output.device)]
     maxk = max(topk)
-    batch_size = target.size(0)
+    # batch_size = target.size(0)
+    batch_size = torch.sum(target_masks)
 
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    correct = pred.eq(target.view(1, -1).expand_as(pred)) * target_masks
 
     res = []
     for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
+        correct_k = correct[:k].view(-1).sum(0)
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 

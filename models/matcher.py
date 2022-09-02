@@ -7,6 +7,7 @@ from scipy.optimize import linear_sum_assignment
 from torch import nn
 
 from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+import torch_xla.core.xla_model as xm
 
 
 class HungarianMatcher(nn.Module):
@@ -68,6 +69,7 @@ class HungarianMatcher(nn.Module):
         # The 1 is a constant that doesn't change the matching, it can be ommitted.
         cost_class = -out_prob[:, tgt_ids]
 
+        xm.mark_step()
         # Compute the L1 cost between boxes
         cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
 
@@ -77,6 +79,7 @@ class HungarianMatcher(nn.Module):
         # Final cost matrix
         C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
         C = -C * tgt_masks
+        xm.mark_step()
         C = C.view(bs, num_queries, -1).cpu()
 
         sizes = [len(v["boxes"]) for v in targets]

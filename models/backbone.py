@@ -14,6 +14,7 @@ from typing import Dict, List
 from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
+import torch_xla.core.xla_model as xm
 
 
 class FrozenBatchNorm2d(torch.nn.Module):
@@ -72,6 +73,9 @@ class BackboneBase(nn.Module):
     def forward(self, tensor_list: NestedTensor):
         xs = self.body(tensor_list.tensors)
         out: Dict[str, NestedTensor] = {}
+        # TODO: Lower aten::upsample_neareast2d.vec
+        # F.interpolate contains unlowered aten::upsample_neareast2d.vec
+        xm.mark_step()
         for name, x in xs.items():
             m = tensor_list.mask
             assert m is not None

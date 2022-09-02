@@ -16,6 +16,7 @@ from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss, sigmoid_focal_loss)
 from .transformer import build_transformer
+import torch_xla.core.xla_model as xm
 
 
 class DETR(nn.Module):
@@ -133,8 +134,8 @@ class SetCriterion(nn.Module):
         This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
         """
         pred_logits = outputs['pred_logits']
-        device = pred_logits.device
-        tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
+        # device = pred_logits.device
+        # tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
         tgt_lengths = torch.sum(torch.cat([v['masks'][None,:] for v in targets],axis=0),axis=1)
         # Count the number of predictions that are NOT "no-object" (which is the last class)
         card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
@@ -320,7 +321,8 @@ def build(args):
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
         num_classes = 250
-    device = torch.device(args.device)
+    # device = torch.device(args.device)
+    device = xm.xla_device()
 
     backbone = build_backbone(args)
 

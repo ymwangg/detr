@@ -14,6 +14,7 @@ from typing import Dict, List
 from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
+import torch_xla.core.xla_model as xm
 
 
 class FrozenBatchNorm2d(torch.nn.Module):

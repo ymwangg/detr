@@ -16,6 +16,7 @@ from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss, sigmoid_focal_loss)
 from .transformer import build_transformer
+import torch_xla.core.xla_model as xm
 
 
 class DETR(nn.Module):
@@ -232,9 +233,14 @@ class SetCriterion(nn.Module):
         # num_boxes = sum(len(t["labels"]) for t in targets)
         # num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         num_boxes = torch.sum(torch.cat([t["masks"] for t in targets]))
-        if is_dist_avail_and_initialized():
-            torch.distributed.all_reduce(num_boxes)
-        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+
+        device = outputs['pred_logits'].device
+        if device.type == "xla":
+            xm.all_reduce(xm.REDUCE_SUM, [num_boxes], scale=1.0 / xm.xrt_world_size())
+        else:
+            if is_dist_avail_and_initialized():
+                torch.distributed.all_reduce(num_boxes)
+            num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
 
         # Compute all the requested losses
         losses = {}
@@ -320,7 +326,11 @@ def build(args):
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
         num_classes = 250
-    device = torch.device(args.device)
+
+    if args.device == "xla":
+        device = xm.xla_device()
+    else:
+        device = torch.device(args.device)
 
     backbone = build_backbone(args)
 

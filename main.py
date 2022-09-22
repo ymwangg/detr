@@ -15,6 +15,9 @@ import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
+import torch_xla.distributed.parallel_loader as pl
+import torch_xla.core.xla_model as xm
+import torch_xla.distributed.xla_multiprocessing as xmp
 
 
 def get_args_parser():
@@ -86,14 +89,14 @@ def get_args_parser():
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
-    parser.add_argument('--device', default='cuda',
+    parser.add_argument('--device', default='xla',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--num_workers', default=4, type=int)
 
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
@@ -110,7 +113,10 @@ def main(args):
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
 
-    device = torch.device(args.device)
+    if args.device == "xla":
+        device = xm.xla_device()
+    else:
+        device = torch.device(args.device)
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -142,12 +148,28 @@ def main(args):
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
 
-    if args.distributed:
-        sampler_train = DistributedSampler(dataset_train)
-        sampler_val = DistributedSampler(dataset_val, shuffle=False)
+    if args.device == "xla":
+        if xm.xrt_world_size() > 1:
+            sampler_train = torch.utils.data.distributed.DistributedSampler(
+                dataset_train,
+                num_replicas=xm.xrt_world_size(),
+                rank=xm.get_ordinal(),
+                shuffle=True)
+            sampler_val = torch.utils.data.distributed.DistributedSampler(
+                dataset_val,
+                num_replicas=xm.xrt_world_size(),
+                rank=xm.get_ordinal(),
+                shuffle=True)
+        else:
+            sampler_train = torch.utils.data.RandomSampler(dataset_train)
+            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
     else:
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
-        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        if args.distributed:
+            sampler_train = DistributedSampler(dataset_train)
+            sampler_val = DistributedSampler(dataset_val, shuffle=False)
+        else:
+            sampler_train = torch.utils.data.RandomSampler(dataset_train)
+            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     batch_sampler_train = torch.utils.data.BatchSampler(
         sampler_train, args.batch_size, drop_last=True)
@@ -156,6 +178,10 @@ def main(args):
                                    collate_fn=utils.collate_fn, num_workers=args.num_workers)
     data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
                                  drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
+
+    if args.device == 'xla':
+        data_loader_train = pl.MpDeviceLoader(data_loader_train, device)
+        data_loader_val = pl.MpDeviceLoader(data_loader_val, device)
 
     if args.dataset_file == "coco_panoptic":
         # We also evaluate AP during panoptic training, on original coco DS
@@ -239,10 +265,15 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
 
+def _mp_fn(index, args):
+    main(args)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    main(args)
+    if args.device == "xla":
+        xmp.spawn(_mp_fn, args=(args,))
+    else:
+        main(args)

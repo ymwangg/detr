@@ -7,7 +7,7 @@ from scipy.optimize import linear_sum_assignment
 from torch import nn
 
 from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
-
+import torch_xla
 
 class HungarianMatcher(nn.Module):
     """This class computes an assignment between the targets and the predictions of the network
@@ -77,11 +77,18 @@ class HungarianMatcher(nn.Module):
         # Final cost matrix
         C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
         C = -C * tgt_masks
-        C = C.view(bs, num_queries, -1).cpu()
 
-        sizes = [len(v["boxes"]) for v in targets]
-        indices = [linear_sum_assignment(c[i], maximize=True) for i, c in enumerate(C.split(sizes, -1))]
-        return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
+        if C.device.type == "xla":
+            C = C.view(bs, num_queries, -1)
+
+            sizes = [len(v["boxes"]) for v in targets]
+            indices = [torch_xla._XLAC._xla_linear_sum_assignment(c[i], True) for i, c in enumerate(C.split(sizes, -1))]
+            return indices
+        else:
+            C = C.view(bs, num_queries, -1).cpu()
+            sizes = [len(v["boxes"]) for v in targets]
+            indices = [linear_sum_assignment(c[i], maximize=True) for i, c in enumerate(C.split(sizes, -1))]
+            return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
 
 def build_matcher(args):

@@ -18,6 +18,11 @@ from models import build_model
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
+from torch_xla.amp import GradScaler
+try:
+  from torch_xla.amp import syncfree
+except ImportError:
+  assert False, "Missing package syncfree; the package is available in torch-xla>=1.11"
 
 
 def get_args_parser():
@@ -141,9 +146,12 @@ def main(args):
             "lr": args.lr_backbone,
         },
     ]
-    optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
-                                  weight_decay=args.weight_decay)
+    #optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
+    #                              weight_decay=args.weight_decay)
+    optim_cls = syncfree.AdamW
+    optimizer = optim_cls(param_dicts, lr=args.lr * xm.xrt_world_size(), weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
+    scaler = GradScaler()
 
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
@@ -219,8 +227,8 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
-        train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch,
+        train_one_epoch(
+            model, criterion, data_loader_train, optimizer, scaler, device, epoch,
             args.clip_max_norm)
         lr_scheduler.step()
         if args.output_dir:
@@ -240,16 +248,16 @@ def main(args):
         test_stats, coco_evaluator = evaluate(
             model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
         )
-
+        '''
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
-
+        
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
-
+        
             # for evaluation logs
             if coco_evaluator is not None:
                 (output_dir / 'eval').mkdir(exist_ok=True)
@@ -260,7 +268,7 @@ def main(args):
                     for name in filenames:
                         torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                    output_dir / "eval" / name)
-
+        '''
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))

@@ -20,6 +20,7 @@ try:
 except ImportError:
   assert False, "Missing package syncfree; the package is available in torch-xla>=1.11"
 import time
+import numpy as np
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
@@ -28,7 +29,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     model.train()
     criterion.train()
 
-    print_freq = 200
+    print_freq = 100
     t0 = time.time()
     for step, (samples, targets) in enumerate(data_loader):
         if device.type != 'xla':
@@ -41,24 +42,28 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
         optimizer.zero_grad()
+ 
         scaler.scale(losses).backward()
         gradients = xm._fetch_gradients(optimizer)
         xm.all_reduce('sum', gradients, scale=1.0 / xm.xrt_world_size())
+
+        scaler.unscale_(optimizer)
+
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
-        if device.type == "xla":
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         if step % print_freq == 0:
             if device.type == "xla":
                 xm.mark_step()
-            print_loss = [("epoch", str(epoch)), ("time", str(time.time() - t0)), ("step", str(step)), ("loss", str(losses.item()))] + [
-                (k, str(v.item())) for k, v in sorted(loss_dict.items())]
-            print(", ".join([": ".join(x) for x in print_loss]))
+            loss = xm.mesh_reduce('loss', losses.item(), np.mean)
+            error = xm.mesh_reduce('error', loss_dict['class_error'].item(), np.mean)
+            #print_loss = [("epoch", str(epoch)), ("time", str(time.time() - t0)), ("step", str(step)), ("loss", str(losses.item()))] + [
+            #    (k, str(v.item())) for k, v in sorted(loss_dict.items())]
+            t = time.time() - t0
+            xm.master_print(f"time={t},epoch={epoch},step={step},loss={loss},error={error}")
 
     return None
 

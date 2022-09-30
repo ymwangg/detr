@@ -149,7 +149,7 @@ def main(args):
     #optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
     #                              weight_decay=args.weight_decay)
     optim_cls = syncfree.AdamW
-    optimizer = optim_cls(param_dicts, lr=args.lr * xm.xrt_world_size(), weight_decay=args.weight_decay)
+    optimizer = optim_cls(param_dicts, lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
     scaler = GradScaler()
 
@@ -231,6 +231,7 @@ def main(args):
             model, criterion, data_loader_train, optimizer, scaler, device, epoch,
             args.clip_max_norm)
         lr_scheduler.step()
+        '''
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             # extra checkpoint before LR drop and every 100 epochs
@@ -248,7 +249,6 @@ def main(args):
         test_stats, coco_evaluator = evaluate(
             model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
         )
-        '''
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,

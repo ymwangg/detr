@@ -237,6 +237,7 @@ class SetCriterion(nn.Module):
         device = outputs['pred_logits'].device
         if device.type == "xla":
             xm.all_reduce(xm.REDUCE_SUM, [num_boxes], scale=1.0 / xm.xrt_world_size())
+            num_boxes = torch.clamp(num_boxes, min=1)
         else:
             if is_dist_avail_and_initialized():
                 torch.distributed.all_reduce(num_boxes)

@@ -54,14 +54,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         scaler.step(optimizer)
         scaler.update()
-
+        if device.type == "xla":
+            xm.mark_step()
         if step % print_freq == 0:
-            if device.type == "xla":
-                xm.mark_step()
             loss = xm.mesh_reduce('loss', losses.item(), np.mean)
             error = xm.mesh_reduce('error', loss_dict['class_error'].item(), np.mean)
-            #print_loss = [("epoch", str(epoch)), ("time", str(time.time() - t0)), ("step", str(step)), ("loss", str(losses.item()))] + [
-            #    (k, str(v.item())) for k, v in sorted(loss_dict.items())]
+            # print_loss = [("epoch", str(epoch)), ("time", str(time.time() - t0)), ("step", str(step)), ("loss", str(losses.item()))] + [
+            #     (k, str(v.item())) for k, v in sorted(loss_dict.items())]
+            # loss = losses.item()
+            # error = loss_dict['class_error'].item()
             t = time.time() - t0
             xm.master_print(f"time={t},epoch={epoch},step={step},loss={loss},error={error}")
 

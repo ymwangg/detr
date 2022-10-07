@@ -18,7 +18,7 @@ from models import build_model
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
-from torch_xla.amp import GradScaler
+import torch_xla.amp
 try:
   from torch_xla.amp import syncfree
 except ImportError:
@@ -151,7 +151,7 @@ def main(args):
     optim_cls = syncfree.AdamW
     optimizer = optim_cls(param_dicts, lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
-    scaler = GradScaler()
+    scaler = torch_xla.amp.GradScaler() if args.device == "xla" else torch.cuda.amp.GradScaler()
 
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
@@ -253,11 +253,11 @@ def main(args):
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
-        
+
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
-        
+
             # for evaluation logs
             if coco_evaluator is not None:
                 (output_dir / 'eval').mkdir(exist_ok=True)

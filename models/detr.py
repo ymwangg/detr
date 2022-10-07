@@ -115,7 +115,7 @@ class SetCriterion(nn.Module):
 
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
-        target_masks = torch.cat([t["masks"][J] for t, (_, J) in zip(targets, indices)])
+        helper_masks = torch.cat([t["helper_masks"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
@@ -125,7 +125,7 @@ class SetCriterion(nn.Module):
 
         if log:
             # TODO this should probably be a separate loss, not hacked in this one here
-            losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o, target_masks)[0]
+            losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o, helper_masks)[0]
         return losses
 
     @torch.no_grad()
@@ -135,8 +135,8 @@ class SetCriterion(nn.Module):
         """
         pred_logits = outputs['pred_logits']
         device = pred_logits.device
-        tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
-        tgt_lengths = torch.sum(torch.cat([v['masks'][None,:] for v in targets],axis=0),axis=1)
+        # tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
+        tgt_lengths = torch.sum(torch.cat([v['helper_masks'][None,:] for v in targets],axis=0),axis=1)
         # Count the number of predictions that are NOT "no-object" (which is the last class)
         card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
         card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
@@ -152,9 +152,9 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs['pred_boxes'][idx]
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-        target_masks = torch.cat([t['masks'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        helper_masks = torch.cat([t['helper_masks'][i] for t, (_, i) in zip(targets, indices)], dim=0)
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-        bbox_mask = target_masks[:,None].expand(loss_bbox.shape)
+        bbox_mask = helper_masks[:,None].expand(loss_bbox.shape)
         losses = {}
         # losses['loss_bbox'] = loss_bbox.sum() / num_boxes
         losses['loss_bbox'] = (loss_bbox * bbox_mask).sum() / num_boxes
@@ -163,7 +163,7 @@ class SetCriterion(nn.Module):
             box_ops.box_cxcywh_to_xyxy(src_boxes),
             box_ops.box_cxcywh_to_xyxy(target_boxes)))
         # losses['loss_giou'] = loss_giou.sum() / num_boxes
-        losses['loss_giou'] = (loss_giou * target_masks).sum() / num_boxes
+        losses['loss_giou'] = (loss_giou * helper_masks).sum() / num_boxes
         return losses
 
     def loss_masks(self, outputs, targets, indices, num_boxes):
@@ -232,7 +232,7 @@ class SetCriterion(nn.Module):
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         # num_boxes = sum(len(t["labels"]) for t in targets)
         # num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
-        num_boxes = torch.sum(torch.cat([t["masks"] for t in targets]))
+        num_boxes = torch.sum(torch.cat([t["helper_masks"] for t in targets]))
 
         device = outputs['pred_logits'].device
         if device.type == "xla":

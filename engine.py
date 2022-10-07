@@ -32,20 +32,23 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     print_freq = 100
     t0 = time.time()
     for step, (samples, targets) in enumerate(data_loader):
+        optimizer.zero_grad()
         if device.type != 'xla':
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
         with autocast():
             outputs = model(samples)
             loss_dict = criterion(outputs, targets)
+
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
-        optimizer.zero_grad()
- 
         scaler.scale(losses).backward()
-        gradients = xm._fetch_gradients(optimizer)
-        xm.all_reduce('sum', gradients, scale=1.0 / xm.xrt_world_size())
+
+        if device.type == 'xla':
+            gradients = xm._fetch_gradients(optimizer)
+            xm.all_reduce('sum', gradients, scale=1.0 / xm.xrt_world_size())
 
         scaler.unscale_(optimizer)
 
@@ -54,9 +57,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         scaler.step(optimizer)
         scaler.update()
-        if device.type == "xla":
-            xm.mark_step()
+
         if step % print_freq == 0:
+            if device.type == "xla":
+                xm.mark_step()
             loss = xm.mesh_reduce('loss', losses.item(), np.mean)
             error = xm.mesh_reduce('error', loss_dict['class_error'].item(), np.mean)
             # print_loss = [("epoch", str(epoch)), ("time", str(time.time() - t0)), ("step", str(step)), ("loss", str(losses.item()))] + [
@@ -64,7 +68,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             # loss = losses.item()
             # error = loss_dict['class_error'].item()
             t = time.time() - t0
-            xm.master_print(f"time={t},epoch={epoch},step={step},loss={loss},error={error}")
+            xm.master_print(f"time={t},epoch={epoch},step={step},loss={loss},error={error}", flush=True)
 
     return None
 

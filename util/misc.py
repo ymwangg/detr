@@ -278,9 +278,10 @@ def collate_fn(batch):
         padded_classes = torch.full((100,), NO_OBJECT_LABEL, dtype=data['labels'].dtype)
         padded_classes[:num_classes] = data['labels']
         data['labels'] = padded_classes
-        mask = torch.zeros((100,))
-        mask[:num_classes] = 1.0
-        data['masks'] = mask
+        # masks used to pad input target tensors
+        helper_masks = torch.zeros((100,))
+        helper_masks[:num_classes] = 1.0
+        data['helper_masks'] = helper_masks
         # for k in ['image_id', 'area', 'iscrowd', 'orig_size', 'size']:
         #     data.pop(k)
     return tuple(batch)
@@ -445,17 +446,17 @@ def init_distributed_mode(args):
 
 
 @torch.no_grad()
-def accuracy(output, target, target_masks, topk=(1,)):
+def accuracy(output, target, helper_masks, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
     if target.numel() == 0:
         return [torch.zeros([], device=output.device)]
     maxk = max(topk)
     # batch_size = target.size(0)
-    batch_size = torch.sum(target_masks)
+    batch_size = torch.sum(helper_masks)
 
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred)) * target_masks
+    correct = pred.eq(target.view(1, -1).expand_as(pred)) * helper_masks
 
     res = []
     for k in topk:

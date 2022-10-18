@@ -282,8 +282,8 @@ def collate_fn(batch):
         helper_masks = torch.zeros((100,))
         helper_masks[:num_classes] = 1.0
         data['helper_masks'] = helper_masks
-        # for k in ['image_id', 'area', 'iscrowd', 'orig_size', 'size']:
-        #     data.pop(k)
+        for k in ['image_id', 'area', 'iscrowd', 'orig_size', 'size']:
+            data.pop(k)
     return tuple(batch)
 
 
